@@ -44,22 +44,39 @@ def get_binance_trades(symbol):
     # 不帶 fromId，API 會回傳該交易對全部交易（最多1000筆）
     return binance_signed_request("/api/v3/myTrades", {"symbol": symbol})
 
-# 清空舊資料（注意：會把第一列也清掉）
-sheet.clear()
+# 先讀取 Google Sheet 現有交易ID，避免重複寫入
+existing_ids = set()
+all_records = sheet.get_all_records()
+for row in all_records:
+    try:
+        existing_ids.add(int(row["id"]))
+    except:
+        pass
 
-# 寫入表頭
-sheet.append_row(["symbol", "id", "price", "qty", "quoteQty", "time", "isBuyer"])
+# 如果 Sheet 是空的，寫入表頭
+if len(all_records) == 0:
+    sheet.append_row(["symbol", "id", "price", "qty", "quoteQty", "time", "isBuyer"])
 
 for symbol in SYMBOLS:
     trades = get_binance_trades(symbol)
-    rows = []
-    for t in trades:
-        trade_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t["time"]/1000))
-        rows.append([
-            t["symbol"], t["id"], t["price"], t["qty"],
-            t["quoteQty"], trade_time, t["isBuyer"]
-        ])
-    if rows:
-        sheet.append_rows(rows)
+    if not trades:
+        print(f"{symbol} 無任何交易資料或API錯誤")
+        continue
 
-print("✅ Google Sheet 已完整更新全部交易紀錄")
+    print(f"{symbol} API 回傳第一筆交易 ID: {trades[0]['id']}")
+
+    new_rows = []
+    for t in trades:
+        tid = int(t["id"])
+        if tid not in existing_ids:
+            trade_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t["time"]/1000))
+            new_rows.append([
+                t["symbol"], t["id"], t["price"], t["qty"],
+                t["quoteQty"], trade_time, t["isBuyer"]
+            ])
+            existing_ids.add(tid)
+
+    if new_rows:
+        sheet.append_rows(new_rows)
+
+print("✅ Google Sheet 已更新完成（不覆蓋舊資料）")
