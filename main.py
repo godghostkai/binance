@@ -12,7 +12,7 @@ API_SECRET = os.environ["BINANCE_API_SECRET"]
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+SYMBOLS = ["BTCUSDT"]  # 你只抓BTC/USDT
 
 creds = ServiceAccountCredentials.from_json_keyfile_dict(
     json.loads(SERVICE_ACCOUNT_JSON),
@@ -22,59 +22,65 @@ client = gspread.authorize(creds)
 sheet = client.open_by_key(SHEET_ID).sheet1
 
 def get_last_trade_id(symbol):
-    # 嘗試從 Sheet 第一列第一欄讀取最後交易 ID，格式是 symbol:lastTradeId
-    # 範例： BTCUSDT:12345678
     try:
         val = sheet.cell(1, 1).value
         if val:
             pairs = val.split(",")
             for p in pairs:
                 s, tid = p.split(":")
-                if s == symbol:
+                if s == symbol and tid != "None":
                     return int(tid)
     except Exception:
         pass
-    return None
+    # 如果沒找到，從7月初起始交易ID開始
+    return 46361639504
 
 def save_last_trade_id(trade_ids):
-    # trade_ids 是 dict {symbol: lastTradeId}
-    # 會存成 symbol:lastTradeId,symbol:lastTradeId 字串放第一列第一欄
     s = ",".join([f"{k}:{v}" for k,v in trade_ids.items()])
     sheet.update_cell(1, 1, s)
 
-def get_binance_trades(symbol, fromId=None):
-    url = "https://api.binance.com/api/v3/myTrades"
+def binance_signed_request(endpoint, params=None):
+    base_url = "https://api.binance.com"
+    if params is None:
+        params = {}
     timestamp = int(time.time() * 1000)
-    qs = f"symbol={symbol}&timestamp={timestamp}"
-    if fromId:
-        qs += f"&fromId={fromId}"
-    signature = hmac.new(API_SECRET.encode("utf-8"), qs.encode("utf-8"), hashlib.sha256).hexdigest()
+    params['timestamp'] = timestamp
+
+    query_string = '&'.join([f"{k}={v}" for k,v in params.items()])
+    signature = hmac.new(API_SECRET.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    url = f"{base_url}{endpoint}?{query_string}&signature={signature}"
     headers = {"X-MBX-APIKEY": API_KEY}
-    r = requests.get(f"{url}?{qs}&signature={signature}", headers=headers)
+    r = requests.get(url, headers=headers)
     data = r.json()
     return data if isinstance(data, list) else []
 
-# 先讀出目前最後的交易 ID
-last_trade_ids = {}
-for s in SYMBOLS:
-    last_trade_ids[s] = get_last_trade_id(s)
+def get_binance_trades(symbol, fromId=None):
+    params = {"symbol": symbol}
+    if fromId:
+        params['fromId'] = fromId
+    return binance_signed_request("/api/v3/myTrades", params)
 
-# 讀出現有的交易 ID 集合，避免重複寫入
+# 讀取 Google Sheet 現有交易ID，避免重複寫入
 existing_ids = set()
 all_records = sheet.get_all_records()
 for row in all_records:
-    existing_ids.add(int(row["id"]))
+    try:
+        existing_ids.add(int(row["id"]))
+    except:
+        pass
 
-# 如果 Sheet 沒資料，先寫表頭（但要注意第一列是最後交易ID存放）
+# 如果 Sheet 沒有資料，先寫入表頭（不會覆蓋第一列儲存的最後交易ID）
 if len(all_records) == 0:
     sheet.append_row(["symbol", "id", "price", "qty", "quoteQty", "time", "isBuyer"])
 
-new_last_ids = last_trade_ids.copy()
+last_trade_ids = {}
 new_rows = []
+new_last_ids = {}
 
 for symbol in SYMBOLS:
-    fromId = last_trade_ids.get(symbol)
-    trades = get_binance_trades(symbol, fromId=fromId)
+    fromId = get_last_trade_id(symbol)
+    trades = get_binance_trades(symbol, fromId)
     if trades:
         for t in trades:
             tid = int(t["id"])
@@ -84,15 +90,14 @@ for symbol in SYMBOLS:
                     t["quoteQty"], t["time"], t["isBuyer"]
                 ])
                 existing_ids.add(tid)
-                # 更新最後交易 ID
                 if symbol not in new_last_ids or tid > new_last_ids[symbol]:
                     new_last_ids[symbol] = tid
+    else:
+        new_last_ids[symbol] = fromId
 
-# 批量新增交易資料
 if new_rows:
     sheet.append_rows(new_rows)
 
-# 更新最後交易 ID 存回 Sheet 第一列
 save_last_trade_id(new_last_ids)
 
-print("✅ Google Sheet 已累積更新完成")
+print("✅ Google Sheet 已從指定起點累積更新完成")
