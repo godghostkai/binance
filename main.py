@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import requests
 import hmac
 import hashlib
@@ -8,16 +9,22 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Binance API Key & Secret
-API_KEY = os.environ.get("BINANCE_API_KEY")
-API_SECRET = os.environ.get("BINANCE_API_SECRET")
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 # Google Sheets 設定
 SHEET_ID = os.environ.get("SHEET_ID")
-GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")  # 改成昨天設定的名稱
 
 # Google Sheets 連線
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(eval(GOOGLE_CREDENTIALS), scope)
+
+try:
+    creds_json = json.loads(GOOGLE_CREDENTIALS)
+except json.JSONDecodeError as e:
+    raise ValueError(f"Google Credentials 格式錯誤: {e}")
+
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(SHEET_ID).sheet1
 
