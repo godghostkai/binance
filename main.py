@@ -4,19 +4,25 @@ import hmac
 import hashlib
 import requests
 import gspread
-import json
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime, timezone, timedelta
 
-API_KEY = os.environ["BINANCE_API_KEY"]
-API_SECRET = os.environ["BINANCE_API_SECRET"]
-SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
-SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+# Binance API
+API_KEY = "WrZNCanHLHiPPPO64OcYvQ74z69O2KehgBlUSI13VY51awIihtqtiahovtxaO3nu"
+API_SECRET = "qM7S4D3z9QVB9ntFcMsFAY6PKNePT8csr48nBfn6D3dsAvaLaiK8ZdXcNXB6lkqi"
 
-SYMBOLS = ["BTCUSDT"]  # 可以一次抓多個幣對
+# Google Sheet
+SHEET_ID = "1QRJBh7dCmIFfyWumYIXV0k3oFDqEdhJNEnMuwBduQxI"
+SERVICE_ACCOUNT_FILE = r"C:\API\service_account.json"
 
-# Google Sheet 連線
-creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    json.loads(SERVICE_ACCOUNT_JSON),
+SYMBOLS = ["BTCUSDT"]
+
+# 手動排除的交易 ID（自行新增）
+EXCLUDE_IDS = {5156509077}  # ← 這裡加上你不要的交易 ID，可多筆
+
+# 連接 Google Sheet
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    SERVICE_ACCOUNT_FILE,
     ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 )
 client = gspread.authorize(creds)
@@ -29,7 +35,7 @@ def binance_signed_request(endpoint, params=None):
     timestamp = int(time.time() * 1000)
     params['timestamp'] = timestamp
 
-    query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+    query_string = '&'.join([f"{k}={v}" for k,v in params.items()])
     signature = hmac.new(API_SECRET.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
     url = f"{base_url}{endpoint}?{query_string}&signature={signature}"
@@ -42,51 +48,48 @@ def binance_signed_request(endpoint, params=None):
     return data if isinstance(data, list) else []
 
 def get_binance_trades(symbol):
-    # 不帶 fromId 會回傳該交易對最近的交易（最多 1000 筆）
     return binance_signed_request("/api/v3/myTrades", {"symbol": symbol})
 
-def main():
-    # 讀取 Google Sheet 現有交易 ID，避免重複
-    existing_ids = set()
-    all_records = sheet.get_all_records()
-    for row in all_records:
-        try:
-            existing_ids.add(int(row["id"]))
-        except:
-            pass
+# 先讀取 Google Sheet 現有交易ID，避免重複寫入
+existing_ids = set()
+all_records = sheet.get_all_records()
+for row in all_records:
+    try:
+        existing_ids.add(int(row["id"]))
+    except:
+        pass
 
-    # 如果是空表，先加表頭
-    if len(all_records) == 0:
-        sheet.append_row(["symbol", "id", "price", "qty", "quoteQty", "time", "isBuyer"])
+# 如果 Sheet 是空的，寫入表頭
+if len(all_records) == 0:
+    sheet.append_row(["symbol", "id", "price", "qty", "quoteQty", "time", "isBuyer"])
 
-    # 處理每個交易對
-    for symbol in SYMBOLS:
-        trades = get_binance_trades(symbol)
-        if not trades:
-            print(f"{symbol} 無任何交易資料或 API 錯誤")
+for symbol in SYMBOLS:
+    trades = get_binance_trades(symbol)
+    if not trades:
+        print(f"{symbol} 無任何交易資料或API錯誤")
+        continue
+
+    print(f"{symbol} API 回傳第一筆交易 ID: {trades[0]['id']}")
+
+    new_rows = []
+    for t in trades:
+        tid = int(t["id"])
+
+        # 跳過已存在或在排除清單的交易
+        if tid in existing_ids or tid in EXCLUDE_IDS:
             continue
 
-        # 印出 API 回傳的第一筆交易 ID
-        print(f"{symbol} API 回傳第一筆交易 ID: {trades[0]['id']}")
+        # 將 UTC 毫秒時間轉換為台北時間 (UTC+8)
+        trade_time = datetime.fromtimestamp(t["time"]/1000, tz=timezone.utc) + timedelta(hours=8)
+        trade_time_str = trade_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        new_rows = []
-        for t in trades:
-            tid = int(t["id"])
-            if tid not in existing_ids:
-                trade_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t["time"] / 1000))
-                new_rows.append([
-                    t["symbol"], t["id"], t["price"], t["qty"],
-                    t["quoteQty"], trade_time, t["isBuyer"]
-                ])
-                existing_ids.add(tid)
+        new_rows.append([
+            t["symbol"], t["id"], t["price"], t["qty"],
+            t["quoteQty"], trade_time_str, t["isBuyer"]
+        ])
+        existing_ids.add(tid)
 
-        if new_rows:
-            sheet.append_rows(new_rows)
-            print(f"✅ {symbol} 新增 {len(new_rows)} 筆資料到 Google Sheet")
-        else:
-            print(f"ℹ️ {symbol} 沒有新交易要新增")
+    if new_rows:
+        sheet.append_rows(new_rows)
 
-    print("✅ 所有交易對更新完成（不覆蓋舊資料）")
-
-if __name__ == "__main__":
-    main()
+print("✅ Google Sheet 已更新完成（不覆蓋舊資料，排除指定交易 ID）")
