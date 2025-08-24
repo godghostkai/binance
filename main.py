@@ -4,26 +4,27 @@ import hmac
 import hashlib
 import requests
 import gspread
+import json
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timezone, timedelta
 
-# Binance API
-API_KEY = "WrZNCanHLHiPPPO64OcYvQ74z69O2KehgBlUSI13VY51awIihtqtiahovtxaO3nu"
-API_SECRET = "qM7S4D3z9QVB9ntFcMsFAY6PKNePT8csr48nBfn6D3dsAvaLaiK8ZdXcNXB6lkqi"
+# Binance API (從 GitHub Secrets 讀取)
+API_KEY = os.environ["BINANCE_API_KEY"]
+API_SECRET = os.environ["BINANCE_API_SECRET"]
 
-# Google Sheet
-SHEET_ID = "1QRJBh7dCmIFfyWumYIXV0k3oFDqEdhJNEnMuwBduQxI"
-SERVICE_ACCOUNT_FILE = r"C:\API\service_account.json"
+# Google Sheet (從 GitHub Secrets 讀取)
+SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
+SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
 SYMBOLS = ["BTCUSDT"]
 
 # 手動排除的交易 ID（自行新增）
-EXCLUDE_IDS = {5156509077}  # ← 這裡加上你不要的交易 ID，可多筆
+EXCLUDE_IDS = {5156509077}  # ← 可多筆
 
-# 連接 Google Sheet
-creds = ServiceAccountCredentials.from_json_keyfile_name(
-    SERVICE_ACCOUNT_FILE,
-    ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+# 連接 Google Sheet（改成 dict，不依賴本地檔案）
+creds = ServiceAccountCredentials.from_json_keyfile_dict(
+    json.loads(SERVICE_ACCOUNT_JSON),
+    ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 )
 client = gspread.authorize(creds)
 sheet = client.open_by_key(SHEET_ID).sheet1
